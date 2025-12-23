@@ -1,0 +1,8 @@
+{
+  "name": "GestureFlow 3D",
+  "description": "A high-performance webcam-driven 3D particle playground using MediaPipe hand tracking and Three.js.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
