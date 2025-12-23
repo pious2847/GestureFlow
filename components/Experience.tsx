@@ -4,8 +4,8 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, Noise, Vignette, ChromaticAberration } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { PARTICLE_COUNT, MAX_DRAW_POINTS, THEME, PHYSICS, DRAWING_CONFIG, PARTICLE_VISUALS } from '../constants';
-import { AppMode, HandData, DrawingStyle, SceneConfig } from '../types';
+import { PARTICLE_COUNT, THEME, PHYSICS, PARTICLE_VISUALS } from '../constants';
+import { AppMode, HandData, DrawingStyle, SceneConfig, HandGesture } from '../types';
 
 interface SceneProps {
   handsRef: React.MutableRefObject<HandData[]>;
@@ -18,7 +18,6 @@ interface SceneProps {
 
 const Nebula: React.FC<{ audioData: number; colorA: string; colorB: string }> = ({ audioData, colorA, colorB }) => {
   const meshRef = useRef<THREE.Mesh>(null);
-  
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uAudio: { value: 0 },
@@ -27,18 +26,8 @@ const Nebula: React.FC<{ audioData: number; colorA: string; colorB: string }> = 
   }), []);
 
   useEffect(() => {
-    gsap.to(uniforms.uColorA.value, { 
-      r: new THREE.Color(colorA).r, 
-      g: new THREE.Color(colorA).g, 
-      b: new THREE.Color(colorA).b, 
-      duration: 2 
-    });
-    gsap.to(uniforms.uColorB.value, { 
-      r: new THREE.Color(colorB).r, 
-      g: new THREE.Color(colorB).g, 
-      b: new THREE.Color(colorB).b, 
-      duration: 2 
-    });
+    gsap.to(uniforms.uColorA.value, { r: new THREE.Color(colorA).r, g: new THREE.Color(colorA).g, b: new THREE.Color(colorA).b, duration: 2 });
+    gsap.to(uniforms.uColorB.value, { r: new THREE.Color(colorB).r, g: new THREE.Color(colorB).g, b: new THREE.Color(colorB).b, duration: 2 });
   }, [colorA, colorB]);
 
   useFrame((state) => {
@@ -85,95 +74,20 @@ const Nebula: React.FC<{ audioData: number; colorA: string; colorB: string }> = 
   );
 };
 
-const Grid: React.FC<{ audioData: number; color: string }> = ({ audioData, color }) => {
-  const gridRef = useRef<THREE.Group>(null);
-  return (
-    <group ref={gridRef} rotation={[Math.PI / 2, 0, 0]}>
-      <gridHelper args={[100, 50, '#111', '#050505']} position={[0, -8, 0]}>
-        <meshBasicMaterial transparent opacity={0.03} color={color} />
-      </gridHelper>
-      <gridHelper args={[100, 50, '#111', '#050505']} position={[0, 8, 0]}>
-        <meshBasicMaterial transparent opacity={0.03} color={color} />
-      </gridHelper>
-    </group>
-  );
-};
-
-const Background: React.FC<{ audioData: number }> = ({ audioData }) => {
-  const starsRef = useRef<THREE.Points>(null);
-  const count = 1000; 
-  const [positions, sizes] = useMemo(() => {
-    const pos = new Float32Array(count * 3);
-    const s = new Float32Array(count);
-    for (let i = 0; i < count; i++) {
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      const r = 35 + Math.random() * 15;
-      pos.set([r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi)], i * 3);
-      s[i] = Math.random() * 0.5;
-    }
-    return [pos, s];
-  }, []);
-
-  useFrame((state) => {
-    if (starsRef.current) {
-      starsRef.current.rotation.y += 0.0001;
-      const starAttr = starsRef.current.geometry.attributes.size as THREE.BufferAttribute;
-      for (let i = 0; i < count; i++) {
-        const pulse = 0.5 + Math.sin(state.clock.getElapsedTime() * 2 + i) * 0.5;
-        starAttr.setX(i, sizes[i] * (0.8 + pulse * 0.2 + audioData * 0.5));
-      }
-      starAttr.needsUpdate = true;
-    }
-  });
-
-  return (
-    <points ref={starsRef}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={count} array={positions} itemSize={3} />
-        <bufferAttribute attach="attributes-size" count={count} array={sizes} itemSize={1} />
-      </bufferGeometry>
-      <shaderMaterial
-        transparent
-        depthWrite={false}
-        uniforms={{ uColor: { value: new THREE.Color(THEME.star) } }}
-        vertexShader={`
-          attribute float size;
-          void main() {
-            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-            gl_PointSize = size * (150.0 / -mvPosition.z);
-            gl_Position = projectionMatrix * mvPosition;
-          }
-        `}
-        fragmentShader={`
-          uniform vec3 uColor;
-          void main() {
-            float d = length(gl_PointCoord - vec2(0.5));
-            if (d > 0.5) discard;
-            gl_FragColor = vec4(uColor, smoothstep(0.5, 0.2, d) * 0.5);
-          }
-        `}
-      />
-    </points>
-  );
-};
-
-const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkeleton, drawStyle, aiConfig }) => {
+const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkeleton, aiConfig }) => {
   const meshRef = useRef<THREE.Points>(null);
-  const drawingRef = useRef<THREE.Points>(null);
   const transitionRef = useRef({ intensity: 1.0 });
-  const smoothedLandmarksRef = useRef<THREE.Vector3[]>([]);
-  const { camera } = useThree();
 
   const activeFriction = useRef(PHYSICS.friction);
   const activeAttract = useRef(PHYSICS.attractForce);
-  const activeMaxSpeed = useRef(PHYSICS.maxSpeed);
+  const timeScale = useRef(1.0);
+  const chaosFactor = useRef(0.0);
+  const alignmentFactor = useRef(0.0);
 
   useEffect(() => {
     if (aiConfig) {
       gsap.to(activeFriction, { current: aiConfig.friction, duration: 2 });
       gsap.to(activeAttract, { current: aiConfig.attractForce, duration: 2 });
-      gsap.to(activeMaxSpeed, { current: aiConfig.maxSpeed, duration: 2 });
     }
   }, [aiConfig]);
 
@@ -205,30 +119,37 @@ const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkelet
     const posArr = posAttr.array as Float32Array;
     const colArr = colAttr.array as Float32Array;
     const sizeArr = sizeAttr.array as Float32Array;
-    const time = state.clock.getElapsedTime();
-    const tIntensity = transitionRef.current.intensity;
 
-    const handCount = hands.length;
-    const hPositions = hands.map(h => ({
-        x: h.palm.x * 5, y: h.palm.y * 3, z: h.palm.z * 5, isOpen: h.isOpen, isPinching: h.isPinching
-    }));
+    let activeGesture = HandGesture.NONE;
+    if (hands.length > 0) activeGesture = hands[0].gesture;
+
+    const targetTimeScale = activeGesture === HandGesture.PEACE ? 0.08 : 1.0;
+    const targetChaos = activeGesture === HandGesture.ROCK ? 1.0 : 0.0;
+    const targetAlignment = activeGesture === HandGesture.THUMBS_UP ? 1.0 : 0.0;
+
+    timeScale.current = THREE.MathUtils.lerp(timeScale.current, targetTimeScale, 0.05);
+    chaosFactor.current = THREE.MathUtils.lerp(chaosFactor.current, targetChaos, 0.05);
+    alignmentFactor.current = THREE.MathUtils.lerp(alignmentFactor.current, targetAlignment, 0.05);
 
     const attractFalloffSq = PHYSICS.attractFalloff * PHYSICS.attractFalloff;
     const repelFalloffSq = PHYSICS.repelFalloff * PHYSICS.repelFalloff;
+
+    const shapeVertices = aiConfig?.shapeVertices;
+    const hasShape = shapeVertices && shapeVertices.length > 0;
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       const i3 = i * 3;
       let x = posArr[i3], y = posArr[i3 + 1], z = posArr[i3 + 2];
       let vx = velocities[i3], vy = velocities[i3 + 1], vz = velocities[i3 + 2];
 
-      for (let j = 0; j < handCount; j++) {
-        const h = hPositions[j];
-        const dx = h.x - x, dy = h.y - y, dz = h.z - z;
+      for (const h of hands) {
+        const hx = h.palm.x * 5, hy = h.palm.y * 3, hz = h.palm.z * 5;
+        const dx = hx - x, dy = hy - y, dz = hz - z;
         const d2 = dx * dx + dy * dy + dz * dz;
 
-        if (h.isOpen && d2 < attractFalloffSq) {
+        if ((h.isOpen || h.gesture === HandGesture.POINTER) && d2 < attractFalloffSq) {
           const dist = Math.sqrt(d2);
-          const force = (PHYSICS.attractFalloff - dist) * activeAttract.current;
+          const force = (PHYSICS.attractFalloff - dist) * activeAttract.current * (h.gesture === HandGesture.POINTER ? 4.0 : 1.0);
           vx += (dx / dist) * force; vy += (dy / dist) * force; vz += (dz / dist) * force;
         } else if (!h.isPinching && d2 < repelFalloffSq) {
           const dist = Math.sqrt(d2);
@@ -237,43 +158,57 @@ const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkelet
         }
       }
 
+      // Home/Shape Attraction
       if (mode === AppMode.PLAYGROUND || mode === AppMode.AI_ORACLE) {
-        vx += (initialPositions[i3] - x) * PHYSICS.returnHomeForce * tIntensity;
-        vy += (initialPositions[i3+1] - y) * PHYSICS.returnHomeForce * tIntensity;
-        vz += (initialPositions[i3+2] - z) * PHYSICS.returnHomeForce * tIntensity;
+        if (hasShape) {
+          // Attract to specific vertex
+          const v = shapeVertices[i % shapeVertices.length];
+          vx += (v.x - x) * 0.015;
+          vy += (v.y - y) * 0.015;
+          vz += (v.z - z) * 0.015;
+        } else {
+          vx += (initialPositions[i3] - x) * PHYSICS.returnHomeForce;
+          vy += (initialPositions[i3+1] - y) * PHYSICS.returnHomeForce;
+          vz += (initialPositions[i3+2] - z) * PHYSICS.returnHomeForce;
+        }
+      }
+
+      if (chaosFactor.current > 0.1) {
+        vx += (Math.random() - 0.5) * chaosFactor.current * 0.4;
+        vy += (Math.random() - 0.5) * chaosFactor.current * 0.4;
+        vz += (Math.random() - 0.5) * chaosFactor.current * 0.4;
       }
 
       vx *= activeFriction.current; vy *= activeFriction.current; vz *= activeFriction.current;
-      const speedSq = vx*vx + vy*vy + vz*vz;
-      if (speedSq > activeMaxSpeed.current ** 2) {
-        const s = activeMaxSpeed.current / Math.sqrt(speedSq);
-        vx *= s; vy *= s; vz *= s;
+      x += vx * timeScale.current; y += vy * timeScale.current; z += vz * timeScale.current;
+
+      if (alignmentFactor.current > 0.1) {
+        const gridSize = 1.2;
+        const targetX = Math.round(x / gridSize) * gridSize;
+        const targetY = Math.round(y / gridSize) * gridSize;
+        const targetZ = Math.round(z / gridSize) * gridSize;
+        x = THREE.MathUtils.lerp(x, targetX, alignmentFactor.current * 0.15);
+        y = THREE.MathUtils.lerp(y, targetY, alignmentFactor.current * 0.15);
+        z = THREE.MathUtils.lerp(z, targetZ, alignmentFactor.current * 0.15);
       }
 
-      x += vx; y += vy; z += vz;
       const limit = PHYSICS.boundaryLimit;
-      if (Math.abs(x) > limit) { x = Math.sign(x) * limit; vx *= -0.9; }
-      if (Math.abs(y) > limit) { y = Math.sign(y) * limit; vy *= -0.9; }
-      if (Math.abs(z) > limit) { z = Math.sign(z) * limit; vz *= -0.9; }
+      if (Math.abs(x) > limit) { x = Math.sign(x) * limit; vx *= -0.5; }
+      if (Math.abs(y) > limit) { y = Math.sign(y) * limit; vy *= -0.5; }
+      if (Math.abs(z) > limit) { z = Math.sign(z) * limit; vz *= -0.5; }
 
       posArr[i3] = x; posArr[i3+1] = y; posArr[i3+2] = z;
       velocities[i3] = vx; velocities[i3+1] = vy; velocities[i3+2] = vz;
 
-      const currentSpeed = Math.sqrt(speedSq);
+      const currentSpeed = Math.sqrt(vx*vx + vy*vy + vz*vz);
       const hueShift = Math.min(currentSpeed * 2, 1);
       const hVal = PARTICLE_VISUALS.hueRange.min + ((PARTICLE_VISUALS.hueRange.max - PARTICLE_VISUALS.hueRange.min) * hueShift);
-      
       const targetCol = new THREE.Color().setHSL(hVal, 0.8, 0.5);
-      if (aiConfig) {
-        const baseCol = new THREE.Color(aiConfig.primary);
-        const altCol = new THREE.Color(aiConfig.secondary);
-        targetCol.lerp(baseCol, 0.5).lerp(altCol, hueShift * 0.5);
-      }
-
+      if (aiConfig) targetCol.lerp(new THREE.Color(aiConfig.primary), 0.5);
+      
       colArr[i3] = THREE.MathUtils.lerp(colArr[i3], targetCol.r, 0.1);
       colArr[i3+1] = THREE.MathUtils.lerp(colArr[i3+1], targetCol.g, 0.1);
       colArr[i3+2] = THREE.MathUtils.lerp(colArr[i3+2], targetCol.b, 0.1);
-
       sizeArr[i] = THREE.MathUtils.lerp(sizeArr[i], (aiConfig?.particleSize || PARTICLE_VISUALS.baseSize) + audioData * 0.1, 0.1);
     }
     posAttr.needsUpdate = true;
@@ -320,21 +255,18 @@ const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkelet
 const Experience: React.FC<SceneProps> = (props) => {
   const pColor = props.aiConfig?.primary || THEME.primary;
   const sColor = props.aiConfig?.secondary || THEME.secondary;
-
   return (
     <div className="absolute inset-0 z-0">
-      <Canvas camera={{ position: [0, 0, 8], fov: 75 }} gl={{ antialias: false, powerPreference: 'high-performance' }}>
+      <Canvas camera={{ position: [0, 0, 8], fov: 75 }} gl={{ antialias: false }}>
         <color attach="background" args={['#010101']} />
         <ambientLight intensity={0.5} />
         <Nebula audioData={props.audioData} colorA={pColor} colorB={sColor} />
-        <Grid audioData={props.audioData} color={pColor} />
-        <Background audioData={props.audioData} />
         <Particles {...props} />
         <EffectComposer enableNormalPass={false}>
-          <Bloom luminanceThreshold={0.85} mipmapBlur intensity={1.0 + props.audioData * 1.5} radius={0.4} />
+          <Bloom luminanceThreshold={0.85} intensity={1.0 + props.audioData * 1.5} radius={0.4} />
           <ChromaticAberration offset={new THREE.Vector2(0.001 * props.audioData, 0.001 * props.audioData)} />
           <Noise opacity={0.03} />
-          <Vignette eskil={false} offset={0.1} darkness={1.2} />
+          <Vignette darkness={1.2} />
         </EffectComposer>
       </Canvas>
     </div>

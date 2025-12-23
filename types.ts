@@ -7,6 +7,15 @@ export enum AppMode {
   AI_ORACLE = 'AI_ORACLE'
 }
 
+export enum HandGesture {
+  NONE = 'NONE',
+  PEACE = 'PEACE',
+  ROCK = 'ROCK',
+  THUMBS_UP = 'THUMBS_UP',
+  POINTER = 'POINTER',
+  OK = 'OK'
+}
+
 export enum DrawingStyle {
   NEON = 'NEON',
   SMOKE = 'SMOKE',
@@ -14,7 +23,14 @@ export enum DrawingStyle {
   PLASMA = 'PLASMA'
 }
 
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface SceneConfig {
+  id?: string;
   primary: string;
   secondary: string;
   accent: string;
@@ -24,6 +40,7 @@ export interface SceneConfig {
   maxSpeed: number;
   particleSize: number;
   label: string;
+  shapeVertices?: Vec3[]; // 3D points defining the object shape
 }
 
 export interface HandData {
@@ -32,6 +49,7 @@ export interface HandData {
   isRight: boolean;
   isOpen: boolean;
   isPinching: boolean;
+  gesture: HandGesture;
   distanceFromCamera: number;
 }
 
