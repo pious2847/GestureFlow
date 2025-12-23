@@ -17,7 +17,8 @@ export const MODES = [
   { id: 'PLAYGROUND', label: 'Playground', icon: '✨' },
   { id: 'AIR_DRAWING', label: 'Air Draw', icon: '🎨' },
   { id: 'SILHOUETTE', label: 'Mirror', icon: '👤' },
-  { id: 'AUDIO_REACTIVE', label: 'Audio', icon: '🔊' }
+  { id: 'AUDIO_REACTIVE', label: 'Audio', icon: '🔊' },
+  { id: 'AI_ORACLE', label: 'Oracle', icon: '🔮' }
 ];
 
 export const PHYSICS = {
@@ -32,7 +33,7 @@ export const PHYSICS = {
   vortexRadius: 3.5,
   maxSpeed: 0.8,
   minSpeed: 0.01,
-  falloff: 4.5, // Legacy/Default interaction radius
+  falloff: 4.5,
   silhouetteSmoothing: 0.08,
   returnHomeForce: 0.02,
   boundaryDamping: 0.9,
@@ -42,7 +43,7 @@ export const PHYSICS = {
 export const PARTICLE_VISUALS = {
   baseSize: 0.02,
   sizeVariation: 0.03,
-  hueRange: { min: 0.5, max: 0.85 }, // Cyan to Purple
+  hueRange: { min: 0.5, max: 0.85 },
   saturation: 0.8,
   lightness: 0.5,
   opacity: 0.8

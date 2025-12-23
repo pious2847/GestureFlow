@@ -3,7 +3,8 @@ export enum AppMode {
   PLAYGROUND = 'PLAYGROUND',
   AIR_DRAWING = 'AIR_DRAWING',
   SILHOUETTE = 'SILHOUETTE',
-  AUDIO_REACTIVE = 'AUDIO_REACTIVE'
+  AUDIO_REACTIVE = 'AUDIO_REACTIVE',
+  AI_ORACLE = 'AI_ORACLE'
 }
 
 export enum DrawingStyle {
@@ -11,6 +12,18 @@ export enum DrawingStyle {
   SMOKE = 'SMOKE',
   TRAIL = 'TRAIL',
   PLASMA = 'PLASMA'
+}
+
+export interface SceneConfig {
+  primary: string;
+  secondary: string;
+  accent: string;
+  friction: number;
+  attractForce: number;
+  repelForce: number;
+  maxSpeed: number;
+  particleSize: number;
+  label: string;
 }
 
 export interface HandData {
