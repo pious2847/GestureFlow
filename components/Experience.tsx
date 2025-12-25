@@ -1,10 +1,10 @@
 
 import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Bloom, EffectComposer, Noise, Vignette, ChromaticAberration } from '@react-three/postprocessing';
+import { Bloom, EffectComposer, Noise, ChromaticAberration } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { PARTICLE_COUNT, THEME, PHYSICS, PARTICLE_VISUALS } from '../constants';
+import { PARTICLE_COUNT, THEME, PHYSICS, PARTICLE_VISUALS, DRAWING_CONFIG } from '../constants';
 import { AppMode, HandData, DrawingStyle, SceneConfig, HandGesture } from '../types';
 
 interface SceneProps {
@@ -16,98 +16,70 @@ interface SceneProps {
   aiConfig: SceneConfig | null;
 }
 
-const Nebula: React.FC<{ audioData: number; colorA: string; colorB: string }> = ({ audioData, colorA, colorB }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const uniforms = useMemo(() => ({
-    uTime: { value: 0 },
-    uAudio: { value: 0 },
-    uColorA: { value: new THREE.Color(colorA) },
-    uColorB: { value: new THREE.Color(colorB) }
-  }), []);
+const CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20], [5, 9], [9, 13], [13, 17]
+];
 
-  useEffect(() => {
-    gsap.to(uniforms.uColorA.value, { r: new THREE.Color(colorA).r, g: new THREE.Color(colorA).g, b: new THREE.Color(colorA).b, duration: 2 });
-    gsap.to(uniforms.uColorB.value, { r: new THREE.Color(colorB).r, g: new THREE.Color(colorB).g, b: new THREE.Color(colorB).b, duration: 2 });
-  }, [colorA, colorB]);
+const HandSkeleton: React.FC<{ handsRef: React.MutableRefObject<HandData[]>, visible: boolean }> = ({ handsRef, visible }) => {
+  const groupRef = useRef<THREE.Group>(null);
 
   useFrame((state) => {
-    if (meshRef.current) {
-      uniforms.uTime.value = state.clock.getElapsedTime();
-      uniforms.uAudio.value = THREE.MathUtils.lerp(uniforms.uAudio.value, audioData, 0.1);
-      meshRef.current.rotation.y += 0.0005;
-    }
-  });
+    if (!groupRef.current) return;
+    groupRef.current.clear();
+    if (!visible) return;
 
-  return (
-    <mesh ref={meshRef} scale={[60, 60, 60]}>
-      <sphereGeometry args={[1, 32, 32]} />
-      <shaderMaterial
-        side={THREE.BackSide}
-        transparent
-        depthWrite={false}
-        uniforms={uniforms}
-        vertexShader={`
-          varying vec3 vPosition;
-          void main() {
-            vPosition = position;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `}
-        fragmentShader={`
-          uniform float uTime;
-          uniform float uAudio;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-          varying vec3 vPosition;
-          float noise(vec3 p) {
-            return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
-          }
-          void main() {
-            float n = noise(vPosition * 0.5 + uTime * 0.02);
-            float alpha = smoothstep(0.9, 1.1, n + uAudio * 0.2);
-            vec3 finalColor = mix(uColorA, uColorB, n);
-            gl_FragColor = vec4(finalColor, alpha * 0.04);
-          }
-        `}
-      />
-    </mesh>
-  );
+    const hands = handsRef.current;
+    let isCompressing = false;
+    if (hands.length === 2) {
+      const h1 = new THREE.Vector3(hands[0].palm.x * 10, hands[0].palm.y * 8, hands[0].palm.z * 10);
+      const h2 = new THREE.Vector3(hands[1].palm.x * 10, hands[1].palm.y * 8, hands[1].palm.z * 10);
+      if (h1.distanceTo(h2) < PHYSICS.compressionThreshold) isCompressing = true;
+    }
+
+    hands.forEach((hand) => {
+      const { landmarks } = hand;
+      if (!landmarks) return;
+      const transform = (lm: { x: number, y: number, z: number }) => new THREE.Vector3(((1 - lm.x) * 2 - 1) * 10, -(lm.y * 2 - 1) * 8, lm.z * -50);
+      const color = isCompressing ? 0xffffff : (hand.isRight ? 0x00f2ff : 0x7000ff);
+
+      CONNECTIONS.forEach(([a, b]) => {
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([transform(landmarks[a]), transform(landmarks[b])]),
+          new THREE.LineBasicMaterial({ color, transparent: true, opacity: isCompressing ? 0.9 : 0.4 })
+        );
+        groupRef.current?.add(line);
+      });
+      landmarks.forEach(lm => {
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(isCompressing ? 0.08 : 0.04, 4, 4), new THREE.MeshBasicMaterial({ color }));
+        sphere.position.copy(transform(lm));
+        groupRef.current?.add(sphere);
+      });
+    });
+  });
+  return <group ref={groupRef} />;
 };
 
-const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkeleton, aiConfig }) => {
+const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, aiConfig, drawStyle }) => {
   const meshRef = useRef<THREE.Points>(null);
-  const transitionRef = useRef({ intensity: 1.0 });
+  const smoothedLandmarks = useRef<THREE.Vector3[]>(Array(42).fill(0).map(() => new THREE.Vector3()));
+  const drawIndex = useRef(0);
+  const drawPoolSize = 8000; // Use a dedicated pool for drawing persistence
 
-  const activeFriction = useRef(PHYSICS.friction);
-  const activeAttract = useRef(PHYSICS.attractForce);
-  const timeScale = useRef(1.0);
-  const chaosFactor = useRef(0.0);
-  const alignmentFactor = useRef(0.0);
-
-  useEffect(() => {
-    if (aiConfig) {
-      gsap.to(activeFriction, { current: aiConfig.friction, duration: 2 });
-      gsap.to(activeAttract, { current: aiConfig.attractForce, duration: 2 });
-    }
-  }, [aiConfig]);
-
-  const [positions, initialPositions, velocities, colors, sizes] = useMemo(() => {
+  const [positions, initialPositions, velocities, colors, sizes, drawTimers] = useMemo(() => {
     const pos = new Float32Array(PARTICLE_COUNT * 3);
     const init = new Float32Array(PARTICLE_COUNT * 3);
     const vel = new Float32Array(PARTICLE_COUNT * 3);
     const col = new Float32Array(PARTICLE_COUNT * 3);
     const siz = new Float32Array(PARTICLE_COUNT);
+    const timers = new Float32Array(PARTICLE_COUNT); // Lifetime for drawn particles
     for (let i = 0; i < PARTICLE_COUNT; i++) {
-      const x = (Math.random() - 0.5) * 12;
-      const y = (Math.random() - 0.5) * 12;
-      const z = (Math.random() - 0.5) * 12;
-      pos.set([x, y, z], i * 3);
-      init.set([x, y, z], i * 3);
-      vel.set([0, 0, 0], i * 3);
-      col.set([0, 0.95, 1], i * 3); 
-      siz[i] = Math.random() * PARTICLE_VISUALS.sizeVariation + PARTICLE_VISUALS.baseSize;
+      const x = (Math.random() - 0.5) * 40, y = (Math.random() - 0.5) * 40, z = (Math.random() - 0.5) * 40;
+      pos.set([x, y, z], i * 3); init.set([x, y, z], i * 3);
+      siz[i] = Math.random() * 0.005 + 0.002;
     }
-    return [pos, init, vel, col, siz];
+    return [pos, init, vel, col, siz, timers];
   }, []);
 
   useFrame((state) => {
@@ -119,101 +91,120 @@ const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkelet
     const posArr = posAttr.array as Float32Array;
     const colArr = colAttr.array as Float32Array;
     const sizeArr = sizeAttr.array as Float32Array;
+    const time = state.clock.elapsedTime;
+    const config = DRAWING_CONFIG[drawStyle];
 
-    let activeGesture = HandGesture.NONE;
-    if (hands.length > 0) activeGesture = hands[0].gesture;
+    // Smoothing Landmarks for Silhouette mode
+    hands.forEach((hand, hIdx) => {
+      hand.landmarks.forEach((lm, lIdx) => {
+        const target = new THREE.Vector3(((1 - lm.x) * 2 - 1) * 10, -(lm.y * 2 - 1) * 8, lm.z * -50);
+        smoothedLandmarks.current[hIdx * 21 + lIdx].lerp(target, PHYSICS.silhouetteSmoothing);
+      });
+    });
 
-    const targetTimeScale = activeGesture === HandGesture.PEACE ? 0.08 : 1.0;
-    const targetChaos = activeGesture === HandGesture.ROCK ? 1.0 : 0.0;
-    const targetAlignment = activeGesture === HandGesture.THUMBS_UP ? 1.0 : 0.0;
-
-    timeScale.current = THREE.MathUtils.lerp(timeScale.current, targetTimeScale, 0.05);
-    chaosFactor.current = THREE.MathUtils.lerp(chaosFactor.current, targetChaos, 0.05);
-    alignmentFactor.current = THREE.MathUtils.lerp(alignmentFactor.current, targetAlignment, 0.05);
-
-    const attractFalloffSq = PHYSICS.attractFalloff * PHYSICS.attractFalloff;
-    const repelFalloffSq = PHYSICS.repelFalloff * PHYSICS.repelFalloff;
-
-    const shapeVertices = aiConfig?.shapeVertices;
-    const hasShape = shapeVertices && shapeVertices.length > 0;
+    // Compression / Rasengan check
+    let midpoint = new THREE.Vector3(), isCompressing = false;
+    if (hands.length === 2) {
+      const h1 = new THREE.Vector3(hands[0].palm.x * 10, hands[0].palm.y * 8, hands[0].palm.z * 10);
+      const h2 = new THREE.Vector3(hands[1].palm.x * 10, hands[1].palm.y * 8, hands[1].palm.z * 10);
+      midpoint.addVectors(h1, h2).multiplyScalar(0.5);
+      if (h1.distanceTo(h2) < PHYSICS.compressionThreshold) isCompressing = true;
+    }
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       const i3 = i * 3;
       let x = posArr[i3], y = posArr[i3 + 1], z = posArr[i3 + 2];
       let vx = velocities[i3], vy = velocities[i3 + 1], vz = velocities[i3 + 2];
 
-      for (const h of hands) {
-        const hx = h.palm.x * 5, hy = h.palm.y * 3, hz = h.palm.z * 5;
-        const dx = hx - x, dy = hy - y, dz = hz - z;
-        const d2 = dx * dx + dy * dy + dz * dz;
-
-        if ((h.isOpen || h.gesture === HandGesture.POINTER) && d2 < attractFalloffSq) {
-          const dist = Math.sqrt(d2);
-          const force = (PHYSICS.attractFalloff - dist) * activeAttract.current * (h.gesture === HandGesture.POINTER ? 4.0 : 1.0);
-          vx += (dx / dist) * force; vy += (dy / dist) * force; vz += (dz / dist) * force;
-        } else if (!h.isPinching && d2 < repelFalloffSq) {
-          const dist = Math.sqrt(d2);
-          const force = (PHYSICS.repelFalloff - dist) * (aiConfig?.repelForce || PHYSICS.repelForce);
-          vx -= (dx / dist) * force; vy -= (dy / dist) * force; vz -= (dz / dist) * force;
-        }
-      }
-
-      // Home/Shape Attraction
-      if (mode === AppMode.PLAYGROUND || mode === AppMode.AI_ORACLE) {
-        if (hasShape) {
-          // Attract to specific vertex
-          const v = shapeVertices[i % shapeVertices.length];
-          vx += (v.x - x) * 0.015;
-          vy += (v.y - y) * 0.015;
-          vz += (v.z - z) * 0.015;
+      // Drawing Logic (subset of particles)
+      if (mode === AppMode.AIR_DRAWING && i < drawPoolSize) {
+        if (drawTimers[i] > 0) {
+          drawTimers[i] *= config.decay;
+          x += (Math.random() - 0.5) * config.jitter;
+          y += (Math.random() - 0.5) * config.jitter;
+          z += (Math.random() - 0.5) * config.jitter;
         } else {
-          vx += (initialPositions[i3] - x) * PHYSICS.returnHomeForce;
-          vy += (initialPositions[i3+1] - y) * PHYSICS.returnHomeForce;
-          vz += (initialPositions[i3+2] - z) * PHYSICS.returnHomeForce;
+          // If inactive, move off-screen or hide
+          z = -100;
+        }
+
+        // Add new points if hand is "pinching" or "pointing"
+        hands.forEach(h => {
+          if (h.isPinching || h.gesture === HandGesture.POINTER) {
+            const nextIdx = (drawIndex.current + 1) % drawPoolSize;
+            const targetX = h.gesture === HandGesture.POINTER ? ((1 - h.landmarks[8].x) * 2 - 1) * 10 : h.palm.x * 10;
+            const targetY = h.gesture === HandGesture.POINTER ? -(h.landmarks[8].y * 2 - 1) * 8 : h.palm.y * 8;
+            const targetZ = h.gesture === HandGesture.POINTER ? h.landmarks[8].z * -50 : h.palm.z * 10;
+            
+            if (i === nextIdx) {
+              x = targetX; y = targetY; z = targetZ;
+              vx = vy = vz = 0;
+              drawTimers[i] = 1.0;
+              drawIndex.current = nextIdx;
+            }
+          }
+        });
+      } else {
+        // Normal Physics for non-drawing particles
+        if (isCompressing) {
+          const dx = midpoint.x - x, dy = midpoint.y - y, dz = midpoint.z - z;
+          const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+          if (d < 8) {
+            const f = (8 - d) * PHYSICS.compressionForce;
+            vx += (dx / d) * f + Math.sin(time * 10 + y) * PHYSICS.vortexSpin;
+            vy += (dy / d) * f;
+            vz += (dz / d) * f + Math.cos(time * 10 + x) * PHYSICS.vortexSpin;
+            vx *= 0.85; vy *= 0.85; vz *= 0.85;
+          }
+        } else if (mode === AppMode.SILHOUETTE && hands.length > 0) {
+          const lmIdx = i % (hands.length * 21);
+          const target = smoothedLandmarks.current[lmIdx];
+          vx += (target.x - x) * 0.015; vy += (target.y - y) * 0.015; vz += (target.z - z) * 0.015;
+          vx *= 0.92; vy *= 0.92; vz *= 0.92;
+        } else {
+          // Interaction with hands
+          for (const h of hands) {
+            const dx = h.palm.x * 10 - x, dy = h.palm.y * 8 - y, dz = h.palm.z * 10 - z;
+            const d2 = dx*dx + dy*dy + dz*dz;
+            if (h.isOpen && d2 < 64) {
+              const d = Math.sqrt(d2);
+              vx += (dx / d) * PHYSICS.attractForce; vy += (dy / d) * PHYSICS.attractForce; vz += (dz / d) * PHYSICS.attractForce;
+            }
+          }
+          // Return home
+          const hX = aiConfig?.shapeVertices ? aiConfig.shapeVertices[i % aiConfig.shapeVertices.length].x : initialPositions[i3];
+          const hY = aiConfig?.shapeVertices ? aiConfig.shapeVertices[i % aiConfig.shapeVertices.length].y : initialPositions[i3+1];
+          const hZ = aiConfig?.shapeVertices ? aiConfig.shapeVertices[i % aiConfig.shapeVertices.length].z : initialPositions[i3+2];
+          vx += (hX - x) * PHYSICS.returnHomeForce; vy += (hY - y) * PHYSICS.returnHomeForce; vz += (hZ - z) * PHYSICS.returnHomeForce;
+          vx *= PHYSICS.friction; vy *= PHYSICS.friction; vz *= PHYSICS.friction;
         }
       }
 
-      if (chaosFactor.current > 0.1) {
-        vx += (Math.random() - 0.5) * chaosFactor.current * 0.4;
-        vy += (Math.random() - 0.5) * chaosFactor.current * 0.4;
-        vz += (Math.random() - 0.5) * chaosFactor.current * 0.4;
-      }
-
-      vx *= activeFriction.current; vy *= activeFriction.current; vz *= activeFriction.current;
-      x += vx * timeScale.current; y += vy * timeScale.current; z += vz * timeScale.current;
-
-      if (alignmentFactor.current > 0.1) {
-        const gridSize = 1.2;
-        const targetX = Math.round(x / gridSize) * gridSize;
-        const targetY = Math.round(y / gridSize) * gridSize;
-        const targetZ = Math.round(z / gridSize) * gridSize;
-        x = THREE.MathUtils.lerp(x, targetX, alignmentFactor.current * 0.15);
-        y = THREE.MathUtils.lerp(y, targetY, alignmentFactor.current * 0.15);
-        z = THREE.MathUtils.lerp(z, targetZ, alignmentFactor.current * 0.15);
-      }
-
-      const limit = PHYSICS.boundaryLimit;
-      if (Math.abs(x) > limit) { x = Math.sign(x) * limit; vx *= -0.5; }
-      if (Math.abs(y) > limit) { y = Math.sign(y) * limit; vy *= -0.5; }
-      if (Math.abs(z) > limit) { z = Math.sign(z) * limit; vz *= -0.5; }
+      const speed = Math.sqrt(vx*vx + vy*vy + vz*vz);
+      if (speed > PHYSICS.maxSpeed) { const s = PHYSICS.maxSpeed / speed; vx *= s; vy *= s; vz *= s; }
+      x += vx; y += vy; z += vz;
 
       posArr[i3] = x; posArr[i3+1] = y; posArr[i3+2] = z;
       velocities[i3] = vx; velocities[i3+1] = vy; velocities[i3+2] = vz;
 
-      const currentSpeed = Math.sqrt(vx*vx + vy*vy + vz*vz);
-      const hueShift = Math.min(currentSpeed * 2, 1);
-      const hVal = PARTICLE_VISUALS.hueRange.min + ((PARTICLE_VISUALS.hueRange.max - PARTICLE_VISUALS.hueRange.min) * hueShift);
-      const targetCol = new THREE.Color().setHSL(hVal, 0.8, 0.5);
-      if (aiConfig) targetCol.lerp(new THREE.Color(aiConfig.primary), 0.5);
-      
+      // Color/Visual Logic
+      const targetCol = new THREE.Color();
+      if (mode === AppMode.AIR_DRAWING && i < drawPoolSize) {
+        targetCol.set(config.color).lerp(new THREE.Color(0xffffff), Math.sin(time * 5 + i) * 0.2);
+        sizeArr[i] = config.size * drawTimers[i];
+      } else if (isCompressing) {
+        targetCol.lerpColors(new THREE.Color(0xffffff), new THREE.Color(hands[0].isRight ? 0x00f2ff : 0x7000ff), Math.sin(time*10));
+        sizeArr[i] = sizes[i] * 3.0;
+      } else {
+        targetCol.setHSL(PARTICLE_VISUALS.hueRange.min + (speed * 0.5), 0.9, 0.5);
+        if (aiConfig) targetCol.lerp(new THREE.Color(aiConfig.primary), 0.5);
+        sizeArr[i] = sizes[i] * (1.0 + audioData);
+      }
       colArr[i3] = THREE.MathUtils.lerp(colArr[i3], targetCol.r, 0.1);
       colArr[i3+1] = THREE.MathUtils.lerp(colArr[i3+1], targetCol.g, 0.1);
       colArr[i3+2] = THREE.MathUtils.lerp(colArr[i3+2], targetCol.b, 0.1);
-      sizeArr[i] = THREE.MathUtils.lerp(sizeArr[i], (aiConfig?.particleSize || PARTICLE_VISUALS.baseSize) + audioData * 0.1, 0.1);
     }
-    posAttr.needsUpdate = true;
-    colAttr.needsUpdate = true;
-    sizeAttr.needsUpdate = true;
+    posAttr.needsUpdate = true; colAttr.needsUpdate = true; sizeAttr.needsUpdate = true;
   });
 
   return (
@@ -223,50 +214,60 @@ const Particles: React.FC<SceneProps> = ({ handsRef, mode, audioData, showSkelet
         <bufferAttribute attach="attributes-color" count={PARTICLE_COUNT} array={colors} itemSize={3} />
         <bufferAttribute attach="attributes-size" count={PARTICLE_COUNT} array={sizes} itemSize={1} />
       </bufferGeometry>
-      <shaderMaterial
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-        vertexShader={`
-          attribute float size;
-          attribute vec3 color;
-          varying vec3 vColor;
-          void main() {
-            vColor = color;
-            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-            gl_PointSize = size * (300.0 / -mvPosition.z);
-            gl_Position = projectionMatrix * mvPosition;
-          }
-        `}
-        fragmentShader={`
-          varying vec3 vColor;
-          void main() {
-            float d = distance(gl_PointCoord, vec2(0.5));
-            if (d > 0.5) discard;
-            float strength = 1.0 - (d * 2.0);
-            gl_FragColor = vec4(vColor, strength);
-          }
-        `}
+      <shaderMaterial transparent depthWrite={false} blending={THREE.AdditiveBlending}
+        vertexShader={`attribute float size; attribute vec3 color; varying vec3 vColor; void main() { vColor = color; vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); gl_PointSize = size * (450.0 / -mvPosition.z); gl_Position = projectionMatrix * mvPosition; }`}
+        fragmentShader={`varying vec3 vColor; void main() { float d = distance(gl_PointCoord, vec2(0.5)); if (d > 0.5) discard; gl_FragColor = vec4(vColor, (1.0 - d * 2.0) * ${PARTICLE_VISUALS.opacity}); }`}
       />
     </points>
   );
 };
 
-const Experience: React.FC<SceneProps> = (props) => {
-  const pColor = props.aiConfig?.primary || THEME.primary;
-  const sColor = props.aiConfig?.secondary || THEME.secondary;
+const Nebula: React.FC<{ audioData: number, colorA: string, colorB: string }> = ({ audioData, colorA, colorB }) => {
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+  const uniforms = useMemo(() => ({
+    uTime: { value: 0 }, uAudio: { value: 0 },
+    uColorA: { value: new THREE.Color(colorA) }, uColorB: { value: new THREE.Color(colorB) }
+  }), []);
+  useFrame(s => { 
+    if (materialRef.current) { 
+      materialRef.current.uniforms.uTime.value = s.clock.elapsedTime; 
+      materialRef.current.uniforms.uAudio.value = THREE.MathUtils.lerp(materialRef.current.uniforms.uAudio.value, audioData, 0.05);
+    } 
+  });
+  useEffect(() => { uniforms.uColorA.value.set(colorA); uniforms.uColorB.value.set(colorB); }, [colorA, colorB, uniforms]);
   return (
-    <div className="absolute inset-0 z-0">
-      <Canvas camera={{ position: [0, 0, 8], fov: 75 }} gl={{ antialias: false }}>
+    <mesh position={[0, 0, -20]} scale={[120, 120, 1]}>
+      <planeGeometry args={[1, 1]} />
+      <shaderMaterial ref={materialRef} transparent depthWrite={false} uniforms={uniforms}
+        vertexShader={`varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`}
+        fragmentShader={`uniform float uTime; uniform float uAudio; uniform vec3 uColorA; uniform vec3 uColorB; varying vec2 vUv;
+          float noise(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+          void main() {
+            vec2 uv = vUv - 0.5; float d = length(uv);
+            float n = noise(vUv * 10.0 + uTime * 0.1);
+            float n2 = noise(vUv * 50.0 - uTime * 0.2);
+            vec3 c = mix(uColorA, uColorB, sin(d * 5.0 - uTime * 0.5) * 0.5 + 0.5);
+            float alpha = smoothstep(1.0, 0.0, d) * (0.05 + uAudio * 0.1 + (n * 0.01) + (n2 * 0.005));
+            gl_FragColor = vec4(c, alpha);
+          }`}
+      />
+    </mesh>
+  );
+};
+
+const Experience: React.FC<SceneProps> = (props) => {
+  const { primary, secondary } = props.aiConfig || THEME;
+  return (
+    <div className="absolute inset-0">
+      <Canvas camera={{ position: [0, 0, 18], fov: 55 }} gl={{ antialias: false, alpha: false }}>
         <color attach="background" args={['#010101']} />
-        <ambientLight intensity={0.5} />
-        <Nebula audioData={props.audioData} colorA={pColor} colorB={sColor} />
+        <Nebula audioData={props.audioData} colorA={primary} colorB={secondary} />
         <Particles {...props} />
-        <EffectComposer enableNormalPass={false}>
-          <Bloom luminanceThreshold={0.85} intensity={1.0 + props.audioData * 1.5} radius={0.4} />
-          <ChromaticAberration offset={new THREE.Vector2(0.001 * props.audioData, 0.001 * props.audioData)} />
-          <Noise opacity={0.03} />
-          <Vignette darkness={1.2} />
+        <HandSkeleton handsRef={props.handsRef} visible={props.showSkeleton} />
+        <EffectComposer disableNormalPass>
+          <Bloom luminanceThreshold={0.9} intensity={0.5 + props.audioData} radius={0.7} mipmapBlur />
+          <ChromaticAberration offset={new THREE.Vector2(0.0005, 0.0005)} />
+          <Noise opacity={0.02} />
         </EffectComposer>
       </Canvas>
     </div>

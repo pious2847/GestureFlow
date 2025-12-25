@@ -22,36 +22,66 @@ export const MODES = [
 ];
 
 export const PHYSICS = {
-  friction: 0.94,
-  attractForce: 0.05,
-  attractFalloff: 4.0,
-  repelForce: 0.45,
-  repelFalloff: 5.0,
-  compressForce: 0.06,
-  compressFalloff: 6.0,
-  vortexForce: 0.02,
-  vortexRadius: 3.5,
-  maxSpeed: 0.8,
-  minSpeed: 0.01,
-  falloff: 4.5,
-  silhouetteSmoothing: 0.08,
-  returnHomeForce: 0.02,
+  // Movement & Damping
+  friction: 0.96,
+  maxSpeed: 0.6,
+  minSpeed: 0.001,
+  
+  // Hand Interaction Forces
+  attractForce: 0.03,
+  attractFalloff: 8.0, 
+  repelForce: 0.3,
+  repelFalloff: 9.0, 
+  
+  // Rasengan / Compression Forces
+  compressionThreshold: 3.5, // Distance between hands to trigger Rasengan
+  compressionForce: 0.15,
+  vortexSpin: 0.2,
+  
+  // Specialized Forces
+  vortexForce: 0.015,
+  vortexRadius: 4.5,
+  noiseStrength: 0.001, 
+  audioForceMultiplier: 0.8, 
+  
+  // Shape & Home Logic
+  returnHomeForce: 0.004,
+  shapeConvergenceForce: 0.012,
+  shapeConvergenceFalloff: 12.0,
+  
+  // Boundary & Smoothing
   boundaryDamping: 0.9,
-  boundaryLimit: 15
+  boundaryLimit: 40,
+  silhouetteSmoothing: 0.15,
+  
+  // Transition Speeds
+  modeTransitionDuration: 1.2,
+  colorTransitionSpeed: 0.05
 };
 
 export const PARTICLE_VISUALS = {
-  baseSize: 0.02,
-  sizeVariation: 0.03,
-  hueRange: { min: 0.5, max: 0.85 },
-  saturation: 0.8,
+  // Size Dynamics
+  baseSize: 0.002,
+  sizeVariation: 0.005,
+  growthScale: 0.6,
+  
+  // Color & Gradient Granularity
+  hueRange: { min: 0.55, max: 0.9 }, 
+  saturation: 0.95,
   lightness: 0.5,
-  opacity: 0.8
+  opacity: 0.12,
+  
+  // Velocity-Visual Mapping
+  speedHueInfluence: 5.0,
+  speedSizeInfluence: 0.15,
+  
+  // Blending
+  additiveBlending: true
 };
 
 export const DRAWING_CONFIG = {
-  NEON: { size: 0.12, opacity: 0.8, color: '#ff00d4', glow: 1.5 },
-  SMOKE: { size: 0.25, opacity: 0.2, color: '#ffffff', glow: 0.5 },
-  TRAIL: { size: 0.05, opacity: 1.0, color: '#00f2ff', glow: 2.0 },
-  PLASMA: { size: 0.18, opacity: 0.6, color: '#7000ff', glow: 1.2 }
+  NEON: { size: 0.08, opacity: 0.4, color: '#ff00d4', glow: 1.2, decay: 0.99, jitter: 0.02 },
+  SMOKE: { size: 0.15, opacity: 0.05, color: '#ffffff', glow: 0.1, decay: 0.94, jitter: 0.08 },
+  TRAIL: { size: 0.02, opacity: 0.6, color: '#00f2ff', glow: 1.8, decay: 0.995, jitter: 0.01 },
+  PLASMA: { size: 0.12, opacity: 0.3, color: '#7000ff', glow: 1.0, decay: 0.96, jitter: 0.05 }
 };
